@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Water Color Loader(three js)</title>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { 
+      margin: 0;
+      overflow: hidden;
+      background-color: aquamarine;
+    }
     #canvas {
       position: absolute;
       left: 0;
@@ -22,13 +26,14 @@
     import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r134/three.module.min.js';
 
     const canvas = document.getElementById('canvas');
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true }); // เพิ่ม alpha: true
     renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x000000, 0);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x000000);
+    // scene.background = new THREE.Color(0x000000);
 
     const camera = new THREE.PerspectiveCamera(45, canvas.clientWidth / canvas.clientHeight, 0.1, 200);
     camera.position.set(0, 0, 5);
@@ -66,7 +71,7 @@
     });
 
     const textureLoader = new THREE.TextureLoader();
-    textureLoader.load('./assests/mask-preloader-half.jpg', (texture) => {
+    textureLoader.load('./assets/mask-preloader-half.jpg', (texture) => {
       material.uniforms.map.value = texture;
       
       const geometry = new THREE.PlaneGeometry(1, 1);
@@ -88,7 +93,7 @@
       return 1 - (1 - t) ** 8;
     }
 
-    const animationDuration = 3000;
+    const animationDuration = 4000;
     const startTime = performance.now();
 
     function animate(currentTime) {

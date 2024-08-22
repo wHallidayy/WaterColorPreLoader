@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Water Color Loader (WebGPU)</title>
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { 
+      margin: 0;
+      overflow: hidden;
+      background-color: aquamarine;
+    }
     #canvas {
       position: absolute;
       left: 0;
@@ -19,128 +23,158 @@
   <canvas id="canvas"></canvas>
 
   <script type="module">
+    // Check if WebGPU is supported
+    if (!navigator.gpu) {
+      alert('WebGPU not supported on this browser.');
+      throw new Error('WebGPU not supported');
+    }
+
     const canvas = document.getElementById('canvas');
     const adapter = await navigator.gpu.requestAdapter();
     const device = await adapter.requestDevice();
+
     const context = canvas.getContext('webgpu');
-
-    const presentationFormat = navigator.gpu.getPreferredCanvasFormat();
+    const canvasFormat = navigator.gpu.getPreferredCanvasFormat();
     context.configure({
-      device,
-      format: presentationFormat,
+      device: device,
+      format: canvasFormat,
+      alphaMode: 'premultiplied',
     });
 
-    // Shaders
-    const shaderModule = device.createShaderModule({
-      code: `
-        struct VertexOutput {
-          @builtin(position) position: vec4f,
-          @location(0) uv: vec2f,
-        }
+    // Vertex shader
+    const vertexShaderCode = `
+      struct Uniforms {
+        modelViewProjectionMatrix : mat4x4<f32>,
+      }
+      @group(0) @binding(3) var<uniform> uniforms : Uniforms;
 
-        @vertex
-        fn vertexMain(@location(0) position: vec2f) -> VertexOutput {
-          var output: VertexOutput;
-          output.position = vec4f(position, 0.0, 1.0);
-          output.uv = position * 0.5 + 0.5;
-          return output;
-        }
+      struct VertexOutput {
+        @builtin(position) position : vec4<f32>,
+        @location(0) uv : vec2<f32>,
+      }
 
-        @group(0) @binding(0) var textureSampler: sampler;
-        @group(0) @binding(1) var textureData: texture_2d<f32>;
-        @group(0) @binding(2) var<uniform> uniforms: Uniforms;
+      @vertex
+      fn main(@location(0) position : vec3<f32>,
+              @location(1) uv : vec2<f32>) -> VertexOutput {
+        var output : VertexOutput;
+        output.position = uniforms.modelViewProjectionMatrix * vec4<f32>(position, 1.0);
+        output.uv = uv;
+        return output;
+      }
+    `;
 
-        struct Uniforms {
-          animatedValue: f32,
-          overallOpacity: f32,
-        }
+    // Fragment shader
+    const fragmentShaderCode = `
+      @group(0) @binding(0) var textureSampler: sampler;
+      @group(0) @binding(1) var textureData: texture_2d<f32>;
+      @group(0) @binding(2) var<uniform> animatedValue: f32;
+      @group(0) @binding(4) var<uniform> opacity: f32;
 
-        @fragment
-        fn fragmentMain(@location(0) uv: vec2f) -> @location(0) vec4f {
-          let texColor = textureSample(textureData, textureSampler, uv);
-          let luminance = dot(texColor.rgb, vec3f(0.299, 0.587, uniforms.animatedValue));
-          return vec4f(1.0, 1.0, 1.0, luminance * uniforms.overallOpacity);
-        }
-      `
-    });
+      @fragment
+      fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
+        let texColor = textureSample(textureData, textureSampler, uv);
+        let luminance = dot(texColor.rgb, vec3<f32>(0.299, 0.587, animatedValue));
+        return vec4<f32>(1.0, 1.0, 1.0, luminance * 0.8 * opacity);  // Multiply by opacity
+      }
+    `;
 
-    // pipeline
-    const pipeline = device.createRenderPipeline({
-      layout: 'auto',
+    //shader modules
+    const vertexShaderModule = device.createShaderModule({ code: vertexShaderCode });
+    const fragmentShaderModule = device.createShaderModule({ code: fragmentShaderCode });
+
+    //render pipeline
+    const pipelineDescriptor = {
       vertex: {
-        module: shaderModule,
-        entryPoint: 'vertexMain',
+        module: vertexShaderModule,
+        entryPoint: 'main',
         buffers: [{
-          arrayStride: 8,
-          attributes: [{
-            shaderLocation: 0,
-            offset: 0,
-            format: 'float32x2',
-          }],
-        }],
+          arrayStride: 5 * 4, // 5 floats
+          attributes: [
+            { format: 'float32x3', offset: 0, shaderLocation: 0 }, // position
+            { format: 'float32x2', offset: 3 * 4, shaderLocation: 1 } // uv
+          ]
+        }]
       },
       fragment: {
-        module: shaderModule,
-        entryPoint: 'fragmentMain',
-        targets: [{
-          format: presentationFormat,
+        module: fragmentShaderModule,
+        entryPoint: 'main',
+        targets: [{ 
+          format: canvasFormat,
           blend: {
             color: {
               srcFactor: 'src-alpha',
               dstFactor: 'one-minus-src-alpha',
+              operation: 'add',
             },
             alpha: {
               srcFactor: 'one',
               dstFactor: 'one-minus-src-alpha',
+              operation: 'add',
             },
           },
-        }],
+        }]
       },
       primitive: {
-        topology: 'triangle-list',
+        topology: 'triangle-list'
       },
-    });
+      layout: 'auto'
+    };
 
+    const pipeline = device.createRenderPipeline(pipelineDescriptor);
+
+    //vertex buffer
     const vertices = new Float32Array([
-      -1, -1,
-      1, -1,
-      -1, 1,
-      -1, 1,
-      1, -1,
-      1, 1,
+      -1, -1, 0, 0, 1,
+       1, -1, 0, 1, 1,
+      -1,  1, 0, 0, 0,
+      -1,  1, 0, 0, 0,
+       1, -1, 0, 1, 1,
+       1,  1, 0, 1, 0
     ]);
+
     const vertexBuffer = device.createBuffer({
       size: vertices.byteLength,
-      usage: GPUBufferUsage.VERTEX,
-      mappedAtCreation: true,
+      usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST,
     });
-    new Float32Array(vertexBuffer.getMappedRange()).set(vertices);
-    vertexBuffer.unmap();
+    device.queue.writeBuffer(vertexBuffer, 0, vertices);
 
-    const uniformBuffer = device.createBuffer({
-      size: 8,
-      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-    });
-
+    // Load texture
     const img = new Image();
-    img.src = './assests/mask-preloader-half.jpg';
+    img.src = './assets/mask-preloader-half.jpg';
     await img.decode();
-    const imageBitmap = await createImageBitmap(img);
 
     const texture = device.createTexture({
-      size: [imageBitmap.width, imageBitmap.height, 1],
+      size: [img.width, img.height, 1],
       format: 'rgba8unorm',
       usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
     });
+
     device.queue.copyExternalImageToTexture(
-      { source: imageBitmap },
+      { source: img },
       { texture: texture },
-      [imageBitmap.width, imageBitmap.height]
+      [img.width, img.height]
     );
 
+    //sampler
     const sampler = device.createSampler({
       magFilter: 'linear',
       minFilter: 'linear',
+    });
+
+    //uniform buffers
+    const animatedValueBuffer = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const opacityBuffer = device.createBuffer({
+      size: 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+    });
+
+    const modelViewProjectionBuffer = device.createBuffer({
+      size: 16 * 4,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
     });
 
     const bindGroup = device.createBindGroup({
@@ -148,62 +182,101 @@
       entries: [
         { binding: 0, resource: sampler },
         { binding: 1, resource: texture.createView() },
-        { binding: 2, resource: { buffer: uniformBuffer } },
+        { binding: 2, resource: { buffer: animatedValueBuffer } },
+        { binding: 3, resource: { buffer: modelViewProjectionBuffer } },
+        { binding: 4, resource: { buffer: opacityBuffer } },
       ],
     });
+    
 
     function easeOutQuint(t) {
       return 1 - (1 - t) ** 8;
     }
 
-    const animationDuration = 3000;
+    const animationDuration = 4000;
     const startTime = performance.now();
 
-    function animate(currentTime) {
-      const elapsedTime = currentTime - startTime;
-      let progress = Math.min(elapsedTime / animationDuration, 1);
+    function updateModelViewProjectionMatrix(aspectRatio) {
+      let scaleX, scaleY;
+      const baseScale = 1;
 
-      progress = easeOutQuint(progress);
-
-      const animatedValue = 1000 - progress * 1000;
-      const overallOpacity = 0.8 * (1 - progress);
-
-      device.queue.writeBuffer(uniformBuffer, 0, new Float32Array([animatedValue, overallOpacity]));
-
-      const commandEncoder = device.createCommandEncoder();
-      const textureView = context.getCurrentTexture().createView();
-
-      const renderPassDescriptor = {
-        colorAttachments: [{
-          view: textureView,
-          clearValue: { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
-          loadOp: 'clear',
-          storeOp: 'store',
-        }],
-      };
-
-      const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
-      passEncoder.setPipeline(pipeline);
-      passEncoder.setBindGroup(0, bindGroup);
-      passEncoder.setVertexBuffer(0, vertexBuffer);
-      passEncoder.draw(6);
-      passEncoder.end();
-
-      device.queue.submit([commandEncoder.finish()]);
-
-      if (progress < 1) {
-        requestAnimationFrame(animate);
+      if (aspectRatio > 1) {
+        scaleX = baseScale 
+        scaleY = baseScale;
+      } else {
+        scaleX = baseScale;
+        scaleY = baseScale / aspectRatio;
       }
+
+      const modelViewProjectionMatrix = new Float32Array([
+        scaleX, 0, 0, 0,
+        0, scaleY, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+      ]);
+      device.queue.writeBuffer(modelViewProjectionBuffer, 0, modelViewProjectionMatrix);
     }
+
+    function animate(currentTime) {
+  const elapsedTime = currentTime - startTime;
+  let progress = Math.min(elapsedTime / animationDuration, 1);
+
+  progress = easeOutQuint(progress);
+
+  const animatedValue = 1000 - progress * 1000;
+  const opacity = progress < 1 ? 1 - progress : 0;
+
+  device.queue.writeBuffer(animatedValueBuffer, 0, new Float32Array([animatedValue]));
+
+  const commandEncoder = device.createCommandEncoder();
+  const textureView = context.getCurrentTexture().createView();
+
+  const renderPassDescriptor = {
+    colorAttachments: [{
+      view: textureView,
+      clearValue: { r: 0, g: 0, b: 0, a: 0 },
+      loadOp: 'clear',
+      storeOp: 'store',
+    }],
+  };
+
+  const passEncoder = commandEncoder.beginRenderPass(renderPassDescriptor);
+  passEncoder.setPipeline(pipeline);
+  passEncoder.setBindGroup(0, bindGroup);
+  passEncoder.setVertexBuffer(0, vertexBuffer);
+  passEncoder.draw(6);
+  passEncoder.end();
+
+  device.queue.submit([commandEncoder.finish()]);
+
+  if (progress < 1) {
+    requestAnimationFrame(animate);
+  }
+
+  device.queue.writeBuffer(opacityBuffer, 0, new Float32Array([opacity]));
+}
 
     function resizeCanvas() {
       const { clientWidth: width, clientHeight: height } = canvas;
-      canvas.width = width * devicePixelRatio;
-      canvas.height = height * devicePixelRatio;
+      const scale = window.devicePixelRatio;
+      canvas.width = Math.floor(width * scale);
+      canvas.height = Math.floor(height * scale);
+      canvas.style.width = width + 'px';
+      canvas.style.height = height + 'px';
+      
+      context.configure({
+        device: device,
+        format: canvasFormat,
+        alphaMode: 'premultiplied',
+        size: [canvas.width, canvas.height],
+      });
+      
+      const aspectRatio = width / height;
+      updateModelViewProjectionMatrix(aspectRatio);
     }
 
-    window.addEventListener('resize', resizeCanvas);
     resizeCanvas();
+    window.addEventListener('resize', resizeCanvas);
     requestAnimationFrame(animate);
   </script>
 </body>
